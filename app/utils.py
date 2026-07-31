@@ -2,6 +2,43 @@ import uuid
 
 from django.contrib.contenttypes.models import ContentType
 
+from app.models import SpamWord
+
+
+def import_spam_words(keywords: list[str]) -> dict:
+    """
+    Import danh sách từ khóa spam.
+
+    Args:
+        keywords: Danh sách từ khóa.
+
+    Returns:
+        Thống kê kết quả import.
+    """
+
+    created_count = 0
+    existed_count = 0
+
+    for keyword in keywords:
+        keyword = keyword.strip()
+
+        if not keyword:
+            continue
+
+        _, created = SpamWord.objects.get_or_create(
+            key=keyword
+        )
+
+        if created:
+            created_count += 1
+        else:
+            existed_count += 1
+
+    return {
+        "created": created_count,
+        "existed": existed_count,
+        "total": created_count + existed_count,
+    }
 
 def get_content_type(content_type):
     """
