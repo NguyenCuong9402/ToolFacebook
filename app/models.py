@@ -25,7 +25,7 @@ class UserToken(models.Model):
 
     def __str__(self):
         return self.user_name
-        
+
 class Page(models.Model):
     page_fb_id = models.CharField(
         max_length=100,
@@ -115,9 +115,8 @@ class Post(models.Model):
         help_text="ID bài viết trên Facebook."
     )
 
-    title = models.CharField(
-        max_length=255,
-        help_text="Nội dung hoặc tiêu đề bài viết."
+    title = models.TextField(
+        help_text="Nội dung bài viết."
     )
 
     created_at = models.DateTimeField(
@@ -138,6 +137,13 @@ class Post(models.Model):
 
 
 class Comment(models.Model):
+    ACTION_DELETE = "delete"
+    ACTION_HIDE = "hide"
+    STATUS = (
+        (ACTION_DELETE, "Xóa"),
+        (ACTION_HIDE, "Ẩn"),
+    )
+
     post = models.ForeignKey(
         Post,
         on_delete=models.CASCADE,
@@ -153,6 +159,14 @@ class Comment(models.Model):
 
     title = models.TextField(
         help_text="Nội dung bình luận."
+    )
+
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS,
+        blank=True,
+        null=True,
+        help_text="Hành động đã thực hiện trên bình luận: xóa hay ẩn."
     )
 
     created_at = models.DateTimeField(
