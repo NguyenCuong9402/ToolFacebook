@@ -1,0 +1,88 @@
+[project]
+name = "codebase-backend"
+version = "0.1.0"
+description = "A backend service for managing S3 storage."
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    # ===== Django core =====
+    "django<6",
+    "djangorestframework>=3.16.1",
+    "django-filter==25.2",
+    # ===== Database =====
+    "psycopg[binary]>=3.3.2",
+    "dj-database-url==3.1.0",
+    # ===== AWS / S3 =====
+    "boto3==1.42.21",
+    "django-storages==1.14.6",
+    # ===== Background jobs =====
+    "celery==5.6.2",
+    "django-celery-beat>=2.8.1",
+    "django-celery-results>=2.6.0",
+    "redis>=7.1.0",
+    # ===== Auth / Security =====
+    "python-dotenv==1.2.1",
+    # ===== Cache / Perf =====
+    "django-redis==6.0.0",
+    # ===== Middleware / Utils =====
+    "django-cors-headers==4.9.0",
+    "django-currentuser==0.9.0",
+    # ===== Observability =====
+    "sentry-sdk>=2.48.0",
+    "loguru==0.7.3",
+    # ===== HTTP / Misc =====
+    "requests>=2.32.5",
+    "markdown>=3.10",
+    # ===== Production =====
+    "gunicorn==23.0.0",
+    "whitenoise==6.11.0",
+    "jsonschema>=4.26.0",
+    "python-logstash>=0.4.8",
+]
+
+
+[dependency-groups]
+dev = [
+    "ruff",
+    "isort",
+    "django-debug-toolbar",
+    # "django-silk",
+]
+
+[tool.ruff]
+line-length = 100
+
+extend-exclude = [
+    "migrations",
+    "__pycache__",
+    ".git",
+    ".venv",
+    "venv",
+    "env",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # Pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "UP",  # pyupgrade
+]
+
+ignore = [
+    "E501",   # line too long
+    "B904",   # raise ... from None
+    "B008",   # function call in default argument
+]
+
+[tool.ruff.lint.isort]
+known-first-party = []
+combine-as-imports = true
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"

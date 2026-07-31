@@ -1,0 +1,73 @@
+# Python
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/*.pyd
+.pytest_cache/
+.coverage
+htmlcov/
+*.egg-info
+dist/
+build/
+
+# Virtual environments
+.venv/
+venv/
+env/
+.poetry/
+
+# Node
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+.npm
+.cache
+
+# Git
+.git
+.gitignore
+.gitmodules
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Environment
+.env
+.env.*
+
+# Static/Media (sẽ được build lại)
+static/
+staticfiles/
+mediafiles/
+
+# Logs
+*.log
+logfile.log
+
+# Output
+output/
+
+# Tests
+tests/
+**/*.backup
+
+# Documentation
+README.md
+*.md
+
+# CI/CD
+.gitlab-ci.yml
+
+# Docker
+docker-compose.yml
+.dockerignore
+
+# Data
+fixtures/
+datatest/
+dev_data.json
+chart/
