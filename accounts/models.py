@@ -31,8 +31,8 @@ class User(AbstractUser):
     REQUIRED_FIELDS = ["username"]
 
     class Meta(AbstractUser.Meta):
-        verbose_name = _("User Account")
-        verbose_name_plural = _("User Accounts")
+        verbose_name = _("Tài khoản ứng dụng")
+        verbose_name_plural = _("Tài khoản ứng dụng")
         indexes = [
             models.Index(fields=["email"], name="accounts_user_email_idx"),
         ]

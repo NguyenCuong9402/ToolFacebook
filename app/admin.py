@@ -169,3 +169,41 @@ class SpamWordAdmin(admin.ModelAdmin):
     search_fields = ("key",)
     ordering = ("key",)
     readonly_fields = ("created_at", "updated_at")
+
+
+from django.contrib import admin
+
+from django_celery_beat.models import (
+    PeriodicTask,
+    IntervalSchedule,
+    CrontabSchedule,
+    ClockedSchedule,
+    SolarSchedule,
+)
+
+from django_celery_results.models import TaskResult, GroupResult
+
+
+# Celery Beat
+for model in [
+    PeriodicTask,
+    IntervalSchedule,
+    CrontabSchedule,
+    ClockedSchedule,
+    SolarSchedule,
+]:
+    try:
+        admin.site.unregister(model)
+    except admin.sites.NotRegistered:
+        pass
+
+
+# Celery Result
+for model in [
+    TaskResult,
+    GroupResult,
+]:
+    try:
+        admin.site.unregister(model)
+    except admin.sites.NotRegistered:
+        pass
