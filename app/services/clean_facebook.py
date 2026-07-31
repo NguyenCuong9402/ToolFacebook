@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Iterable, Optional
 
 from django.db import transaction
+from django.utils import timezone
 
 from app.models import Comment, Page, PageToken, Post, SpamWord, UserToken
 from app.quet import (
@@ -27,16 +28,27 @@ class CleanFacebook:
         if not page:
             raise ValueError("Page không hợp lệ")
 
-        existing = PageToken.objects.filter(page=page).order_by("-created_at").first()
-        if existing and existing.access_token:
-            return existing
-
         source_token = user_token
         if source_token is None:
             source_token = UserToken.objects.order_by("-created_at").first()
 
         if source_token is None:
             raise ValueError("Chưa có UserToken nào để tạo PageToken")
+
+        existing = (
+            PageToken.objects.filter(page=page, user_token=source_token)
+            .order_by("-created_at")
+            .first()
+        )
+
+        if existing and existing.access_token:
+            try:
+                get_page_access_token(existing.access_token, page.page_fb_id, self.version)
+                return existing
+            except TokenExpiredError:
+                existing.access_token = ""
+                existing.expires_at = timezone.now()
+                existing.save(update_fields=["access_token", "expires_at"])
 
         page_access_token = get_page_access_token(
             source_token.access_token,
@@ -48,6 +60,7 @@ class CleanFacebook:
             user_token=source_token,
             page=page,
             access_token=page_access_token,
+            expires_at=None,
         )
 
     def _load_keywords(self, keywords: Optional[Iterable[str]] = None) -> list[str]:
@@ -145,6 +158,7 @@ class CleanFacebook:
         action: str = "hide",
         user_token: Optional[UserToken] = None,
         keywords: Optional[Iterable[str]] = None,
+        posts: Optional[Iterable[Post]] = None,
     ) -> dict:
         if action not in {"delete", "hide"}:
             raise ValueError("Hành động không hợp lệ. Chỉ hỗ trợ delete hoặc hide")
@@ -155,8 +169,9 @@ class CleanFacebook:
         processed_total = 0
         saved_total = 0
         results = []
+        posts_to_process = list(posts or page.posts.all())
 
-        for post in page.posts.all():
+        for post in posts_to_process:
             try:
                 result = self.scan_and_delete_spam(
                     post=post,

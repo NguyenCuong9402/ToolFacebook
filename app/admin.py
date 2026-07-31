@@ -1,8 +1,11 @@
+import os
 import re
 
+from django import forms
 from django.contrib import admin, messages
+from django.contrib.admin.helpers import ActionForm
 from django.db import transaction
-from django.shortcuts import redirect
+from django.shortcuts import redirect, render
 from django.urls import path
 
 from .models import (
@@ -14,6 +17,25 @@ from .models import (
     SpamWord,
 )
 from .services.clean_facebook import CleanFacebook
+
+
+class ImportSpamWordsForm(forms.Form):
+    import_file = forms.FileField(required=True, label="Chọn file .txt")
+
+
+class CleanFacebookActionForm(ActionForm):
+    user_token = forms.ModelChoiceField(
+        queryset=UserToken.objects.all().order_by("-created_at"),
+        required=False,
+        label="User Token",
+        empty_label="Tự động chọn",
+    )
+    action_type = forms.ChoiceField(
+        choices=[("hide", "Ẩn"), ("delete", "Xóa")],
+        required=True,
+        label="Hành động",
+        initial="hide",
+    )
 
 
 @admin.register(UserToken)
@@ -31,8 +53,6 @@ class UserTokenAdmin(admin.ModelAdmin):
 
 @admin.register(Page)
 class PageAdmin(admin.ModelAdmin):
-    actions = ["clean_facebook_comments"]
-
     list_display = (
         "id",
         "title",
@@ -52,36 +72,6 @@ class PageAdmin(admin.ModelAdmin):
         "created_at",
         "updated_at",
     )
-
-    def clean_facebook_comments(self, request, queryset):
-        service = CleanFacebook()
-        processed_total = 0
-        saved_total = 0
-        errors = []
-
-        for page in queryset:
-            try:
-                result = service.run_for_page(page=page, action="hide")
-                processed_total += result["processed_count"]
-                saved_total += result["saved_count"]
-            except Exception as exc:  # pragma: no cover - admin safety net
-                errors.append(f"{page.title}: {exc}")
-
-        if errors:
-            self.message_user(
-                request,
-                f"Một số trang xử lý lỗi: {'; '.join(errors)}",
-                level=messages.ERROR,
-            )
-        else:
-            self.message_user(
-                request,
-                f"Đã quét và xử lý {processed_total} comment spam. Đã lưu {saved_total} comment vào DB.",
-                level=messages.SUCCESS,
-            )
-
-    clean_facebook_comments.short_description = "Quét và xử lý comment spam trên Facebook"
-
 
 @admin.register(PageToken)
 class PageTokenAdmin(admin.ModelAdmin):
@@ -120,6 +110,9 @@ class PageTokenAdmin(admin.ModelAdmin):
 
 @admin.register(Post)
 class PostAdmin(admin.ModelAdmin):
+    actions = ["clean_facebook_comments"]
+    action_form = CleanFacebookActionForm
+
     list_display = (
         "id",
         "title",
@@ -136,6 +129,46 @@ class PostAdmin(admin.ModelAdmin):
     autocomplete_fields = ("page",)
     ordering = ("-created_at",)
     readonly_fields = ("created_at", "updated_at")
+
+    def clean_facebook_comments(self, request, queryset):
+        service = CleanFacebook()
+        processed_total = 0
+        saved_total = 0
+        errors = []
+
+        user_token_id = request.POST.get("user_token")
+        action_type = request.POST.get("action_type", "hide")
+        user_token = None
+        if user_token_id:
+            user_token = UserToken.objects.filter(pk=user_token_id).first()
+
+        for post in queryset:
+            try:
+                result = service.run_for_page(
+                    page=post.page,
+                    action=action_type,
+                    user_token=user_token,
+                    posts=[post],
+                )
+                processed_total += result["processed_count"]
+                saved_total += result["saved_count"]
+            except Exception as exc:  # pragma: no cover - admin safety net
+                errors.append(f"{post.post_fb_id}: {exc}")
+
+        if errors:
+            self.message_user(
+                request,
+                f"Một số bài viết xử lý lỗi: {'; '.join(errors)}",
+                level=messages.ERROR,
+            )
+        else:
+            self.message_user(
+                request,
+                f"Đã quét và xử lý {processed_total} comment spam. Đã lưu {saved_total} comment vào DB.",
+                level=messages.SUCCESS,
+            )
+
+    clean_facebook_comments.short_description = "Quét và xử lý comment spam trên Facebook"
 
 
 @admin.register(Comment)
@@ -161,6 +194,8 @@ class CommentAdmin(admin.ModelAdmin):
 
 @admin.register(SpamWord)
 class SpamWordAdmin(admin.ModelAdmin):
+    change_list_template = "admin/spamword_import.html"
+
     list_display = (
         "id",
         "key",
@@ -169,6 +204,49 @@ class SpamWordAdmin(admin.ModelAdmin):
     search_fields = ("key",)
     ordering = ("key",)
     readonly_fields = ("created_at", "updated_at")
+
+    def get_urls(self):
+        urls = super().get_urls()
+        custom_urls = [
+            path("import-from-file/", self.admin_site.admin_view(self.import_from_file), name="app_spamword_import_from_file"),
+        ]
+        return custom_urls + urls
+
+    def import_from_file(self, request):
+        if request.method == "POST":
+            form = ImportSpamWordsForm(request.POST, request.FILES)
+            if form.is_valid():
+                file_obj = request.FILES["import_file"]
+                content = file_obj.read().decode("utf-8", errors="ignore")
+                imported_count = 0
+                skipped_count = 0
+
+                for raw_line in content.splitlines():
+                    keyword = raw_line.strip()
+                    if not keyword:
+                        continue
+                    obj, created = SpamWord.objects.get_or_create(key=keyword)
+                    if created:
+                        imported_count += 1
+                    else:
+                        skipped_count += 1
+
+                self.message_user(
+                    request,
+                    f"Đã import {imported_count} từ khóa mới. Bỏ qua {skipped_count} từ khóa đã tồn tại.",
+                    level=messages.SUCCESS,
+                )
+                return redirect("admin:app_spamword_changelist")
+        else:
+            form = ImportSpamWordsForm()
+
+        context = {
+            **self.admin_site.each_context(request),
+            "opts": self.model._meta,
+            "form": form,
+            "title": "Import từ khóa spam từ file .txt",
+        }
+        return render(request, "admin/spamword_import.html", context)
 
 
 from django.contrib import admin
