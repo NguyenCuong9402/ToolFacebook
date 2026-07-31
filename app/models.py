@@ -25,7 +25,35 @@ class UserToken(models.Model):
 
     def __str__(self):
         return self.user_name
+        
+class Page(models.Model):
+    page_fb_id = models.CharField(
+        max_length=100,
+        unique=True,
+        help_text="ID của Fanpage trên Facebook."
+    )
 
+    title = models.CharField(
+        max_length=255,
+        help_text="Tên Fanpage."
+    )
+
+    created_at = models.DateTimeField(
+        auto_now_add=True,
+        help_text="Thời điểm tạo bản ghi."
+    )
+
+    updated_at = models.DateTimeField(
+        auto_now=True,
+        help_text="Thời điểm cập nhật gần nhất."
+    )
+
+    class Meta:
+        verbose_name = "Fanpage"
+        verbose_name_plural = "Fanpage"
+
+    def __str__(self):
+        return self.title
 
 class PageToken(models.Model):
     user_token = models.ForeignKey(
@@ -35,10 +63,11 @@ class PageToken(models.Model):
         help_text="User Token sở hữu Page Token này."
     )
 
-    page_fb_id = models.CharField(
-        max_length=100,
-        unique=True,
-        help_text="ID của Fanpage trên Facebook."
+    page = models.ForeignKey(
+        Page,
+        on_delete=models.CASCADE,
+        related_name="tokens",
+        help_text="Fanpage sử dụng Page Token này."
     )
 
     access_token = models.TextField(
@@ -55,6 +84,7 @@ class PageToken(models.Model):
         auto_now_add=True,
         help_text="Thời điểm tạo bản ghi."
     )
+
     updated_at = models.DateTimeField(
         auto_now=True,
         help_text="Thời điểm cập nhật gần nhất."
@@ -65,43 +95,10 @@ class PageToken(models.Model):
         verbose_name_plural = "Page Token"
 
     def __str__(self):
-        return self.page_fb_id
+        return f"{self.id}"
 
 
-class Page(models.Model):
-    page_fb_id = models.CharField(
-        max_length=100,
-        unique=True,
-        help_text="ID của Fanpage trên Facebook."
-    )
 
-    title = models.CharField(
-        max_length=255,
-        help_text="Tên Fanpage."
-    )
-
-    page_token = models.OneToOneField(
-        PageToken,
-        on_delete=models.CASCADE,
-        related_name="page",
-        help_text="Page Token dùng để quản lý Fanpage."
-    )
-
-    created_at = models.DateTimeField(
-        auto_now_add=True,
-        help_text="Thời điểm tạo bản ghi."
-    )
-    updated_at = models.DateTimeField(
-        auto_now=True,
-        help_text="Thời điểm cập nhật gần nhất."
-    )
-
-    class Meta:
-        verbose_name = "Fanpage"
-        verbose_name_plural = "Fanpage"
-
-    def __str__(self):
-        return self.title
 
 
 class Post(models.Model):

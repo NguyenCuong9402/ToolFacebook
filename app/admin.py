@@ -31,44 +31,62 @@ class UserTokenAdmin(admin.ModelAdmin):
     readonly_fields = ("created_at", "updated_at")
 
 
-@admin.register(PageToken)
-class PageTokenAdmin(admin.ModelAdmin):
-    list_display = (
-        "id",
-        "page_fb_id",
-        "user_token",
-        "expires_at",
-        "created_at",
-    )
-    search_fields = (
-        "page_fb_id",
-        "user_token__user_name",
-    )
-    list_filter = (
-        "expires_at",
-        "created_at",
-    )
-    autocomplete_fields = ("user_token",)
-    ordering = ("-created_at",)
-    readonly_fields = ("created_at", "updated_at")
-
-
 @admin.register(Page)
 class PageAdmin(admin.ModelAdmin):
     list_display = (
         "id",
         "title",
         "page_fb_id",
-        "page_token",
         "created_at",
+        "updated_at",
     )
+
     search_fields = (
         "title",
         "page_fb_id",
     )
-    autocomplete_fields = ("page_token",)
+
     ordering = ("-created_at",)
-    readonly_fields = ("created_at", "updated_at")
+
+    readonly_fields = (
+        "created_at",
+        "updated_at",
+    )
+
+
+@admin.register(PageToken)
+class PageTokenAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "page",
+        "user_token",
+        "expires_at",
+        "created_at",
+        "updated_at",
+    )
+
+    search_fields = (
+        "page__title",
+        "page__page_fb_id",
+        "user_token__user_name",
+    )
+
+    list_filter = (
+        "expires_at",
+        "created_at",
+    )
+
+    autocomplete_fields = (
+        "page",
+        "user_token",
+    )
+
+    ordering = ("-created_at",)
+
+    readonly_fields = (
+        "created_at",
+        "updated_at",
+    )
 
 
 @admin.register(Post)

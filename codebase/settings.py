@@ -289,16 +289,7 @@ SESSION_COOKIE_HTTPONLY = True
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", get_config("HTTP_X_FORWARDED_PROTO", "https"))
 
 
-AWS_S3_ACCESS_KEY_ID = get_config("AWS_S3_ACCESS_KEY_ID")
-AWS_S3_SECRET_ACCESS_KEY = get_config("AWS_S3_SECRET_ACCESS_KEY")
-AWS_STORAGE_BUCKET_NAME = get_config("AWS_STORAGE_BUCKET_NAME")
-AWS_S3_ENDPOINT_URL = get_config("AWS_S3_ENDPOINT_URL")
-
-if AWS_S3_ACCESS_KEY_ID:
-    STORAGES["default"] = {
-        "BACKEND": "storages.backends.s3.S3Storage",
-    }
-
+SITE_ID = 1
 
 # Gmail
 EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
