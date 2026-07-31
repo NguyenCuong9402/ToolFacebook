@@ -1,0 +1,10 @@
+{% extends "admin/change_list.html" %}
+
+{% block object-tools-items %}
+  <li>
+    <a href="{% url 'admin:spamword_import_from_file' %}" onclick="window.open(this.href, 'spamword-import', 'width=520,height=320,top=120,left=120,resizable=yes,scrollbars=yes'); return false;" class="addlink">
+      Import
+    </a>
+  </li>
+  {{ block.super }}
+{% endblock %}

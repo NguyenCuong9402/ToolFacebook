@@ -194,7 +194,7 @@ class CommentAdmin(admin.ModelAdmin):
 
 @admin.register(SpamWord)
 class SpamWordAdmin(admin.ModelAdmin):
-    change_list_template = "admin/spamword_import.html"
+    change_list_template = "admin/app/spamword/change_list.html"
 
     list_display = (
         "id",
@@ -208,7 +208,11 @@ class SpamWordAdmin(admin.ModelAdmin):
     def get_urls(self):
         urls = super().get_urls()
         custom_urls = [
-            path("import-from-file/", self.admin_site.admin_view(self.import_from_file), name="app_spamword_import_from_file"),
+            path(
+                "import-from-file/",
+                self.admin_site.admin_view(self.import_from_file),
+                name="spamword_import_from_file",
+            ),
         ]
         return custom_urls + urls
 
@@ -225,7 +229,7 @@ class SpamWordAdmin(admin.ModelAdmin):
                     keyword = raw_line.strip()
                     if not keyword:
                         continue
-                    obj, created = SpamWord.objects.get_or_create(key=keyword)
+                    _, created = SpamWord.objects.get_or_create(key=keyword)
                     if created:
                         imported_count += 1
                     else:
