@@ -179,7 +179,7 @@ def get_sub_comments(comment_id: str, access_token: str, version: str = "v20.0")
     return sub_comments
 
 
-def fetch_all_post_comments(post_id: str, access_token: str, version: str = "v20.0", limit: int = 1000) -> list:
+def fetch_all_post_comments(post_id: str, access_token: str, version: str = "v20.0", limit: int = 2000) -> list:
     url = f"https://graph.facebook.com/{version}/{post_id}/comments"
     params = {
         "access_token": access_token,
@@ -204,6 +204,7 @@ def fetch_all_post_comments(post_id: str, access_token: str, version: str = "v20
             logger.error("[ERROR] Lỗi khi lấy comment bài viết %s: %s", post_id, data.get("error", data))
             break
 
+    logger.info("[FETCH] Post %s: tổng số comment đã lấy từ Facebook = %s", post_id, len(all_comments))
     return all_comments
 
 
