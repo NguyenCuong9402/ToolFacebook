@@ -30,12 +30,6 @@ class CleanFacebookActionForm(ActionForm):
         label="User Token",
         empty_label="Tự động chọn",
     )
-    action_type = forms.ChoiceField(
-        choices=[("hide", "Ẩn"), ("delete", "Xóa")],
-        required=True,
-        label="Hành động",
-        initial="hide",
-    )
 
 
 @admin.register(UserToken)
@@ -110,7 +104,7 @@ class PageTokenAdmin(admin.ModelAdmin):
 
 @admin.register(Post)
 class PostAdmin(admin.ModelAdmin):
-    actions = ["clean_facebook_comments"]
+    actions = ["hide_facebook_comments", "delete_facebook_comments"]
     action_form = CleanFacebookActionForm
 
     list_display = (
@@ -130,45 +124,35 @@ class PostAdmin(admin.ModelAdmin):
     ordering = ("-created_at",)
     readonly_fields = ("created_at", "updated_at")
 
-    def clean_facebook_comments(self, request, queryset):
-        service = CleanFacebook()
-        processed_total = 0
-        saved_total = 0
-        errors = []
+    def _resolve_user_token(self, request):
+        token_id = request.POST.get("user_token")
+        if not token_id:
+            return None
+        return UserToken.objects.filter(pk=token_id).first()
 
-        user_token_id = request.POST.get("user_token")
-        action_type = request.POST.get("action_type", "hide")
-        user_token = None
-        if user_token_id:
-            user_token = UserToken.objects.filter(pk=user_token_id).first()
+    def hide_facebook_comments(self, request, queryset):
+        user_token = self._resolve_user_token(request)
+        results = CleanFacebook().run_for_posts(queryset, action_type="hide", user_token_obj=user_token)
+        processed_count = sum(item.get("processed_count", 0) for item in results)
+        self.message_user(
+            request,
+            f"Đã ẩn {processed_count} comment spam trên {queryset.count()} bài viết.",
+            level=messages.SUCCESS,
+        )
 
-        for post in queryset:
-            try:
-                result = service.run_for_page(
-                    page=post.page,
-                    action=action_type,
-                    user_token=user_token,
-                    posts=[post],
-                )
-                processed_total += result["processed_count"]
-                saved_total += result["saved_count"]
-            except Exception as exc:  # pragma: no cover - admin safety net
-                errors.append(f"{post.post_fb_id}: {exc}")
+    hide_facebook_comments.short_description = "Ẩn comment spam trên Facebook"
 
-        if errors:
-            self.message_user(
-                request,
-                f"Một số bài viết xử lý lỗi: {'; '.join(errors)}",
-                level=messages.ERROR,
-            )
-        else:
-            self.message_user(
-                request,
-                f"Đã quét và xử lý {processed_total} comment spam. Đã lưu {saved_total} comment vào DB.",
-                level=messages.SUCCESS,
-            )
+    def delete_facebook_comments(self, request, queryset):
+        user_token = self._resolve_user_token(request)
+        results = CleanFacebook().run_for_posts(queryset, action_type="delete", user_token_obj=user_token)
+        processed_count = sum(item.get("processed_count", 0) for item in results)
+        self.message_user(
+            request,
+            f"Đã xóa {processed_count} comment spam trên {queryset.count()} bài viết.",
+            level=messages.SUCCESS,
+        )
 
-    clean_facebook_comments.short_description = "Quét và xử lý comment spam trên Facebook"
+    delete_facebook_comments.short_description = "Xóa comment spam trên Facebook"
 
 
 @admin.register(Comment)

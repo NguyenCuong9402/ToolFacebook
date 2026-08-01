@@ -1,200 +1,297 @@
-from __future__ import annotations
+import logging
+import re
+import time
+import unicodedata
 
-from typing import Iterable, Optional
+import requests
 
-from django.db import transaction
-from django.utils import timezone
+from ..models import Comment, PageToken, SpamWord, UserToken
 
-from app.models import Comment, Page, PageToken, Post, SpamWord, UserToken
-from app.quet import (
-    MIN_FUZZY_KEYWORD_LEN,
-    TokenExpiredError,
-    build_match_variants,
-    delete_comment,
-    fetch_all_post_comments,
-    get_page_access_token,
-    hide_comment,
-    text_contains_keyword,
+logger = logging.getLogger(__name__)
+
+
+class TokenExpiredError(Exception):
+    """Access token không còn hợp lệ."""
+
+
+_INVISIBLE_CHARS_RE = re.compile(r"[\u200b\u200c\u200d\u2060\ufeff]")
+_SEPARATOR_BETWEEN_LETTERS_RE = re.compile(
+    r"(?<=[^\W\d_])[\s\.\-_,*]+(?=[^\W\d_])",
+    re.UNICODE,
 )
 
 
-class CleanFacebook:
-    """Service orchestrator để quét và xử lý comment spam trên Facebook."""
+def strip_diacritics(text: str) -> str:
+    normalized = unicodedata.normalize("NFD", text)
+    return "".join(ch for ch in normalized if unicodedata.category(ch) != "Mn")
 
+
+def normalize_text(text: str) -> str:
+    if not text:
+        return ""
+    value = _INVISIBLE_CHARS_RE.sub("", text)
+    value = _SEPARATOR_BETWEEN_LETTERS_RE.sub("", value)
+    value = strip_diacritics(value)
+    value = value.lower()
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def normalize_post_fb_id(post_fb_id: str, page_fb_id: str) -> str:
+    if not post_fb_id:
+        return ""
+
+    normalized = str(post_fb_id).strip()
+    if not page_fb_id:
+        return normalized
+
+    page_id_str = str(page_fb_id).strip()
+    if not page_id_str:
+        return normalized
+
+    if normalized.startswith(f"{page_id_str}_") or normalized.startswith(page_id_str):
+        return normalized
+
+    if "_" in normalized:
+        return normalized
+
+    return f"{page_id_str}_{normalized}"
+
+
+def is_transient_error(err: dict) -> bool:
+    err_code = err.get("code")
+    if err_code in (4, 17, 32, 613):
+        return True
+    if err_code == 1 and "reduce the amount of data" in err.get("message", "").lower():
+        return True
+    return False
+
+
+def graph_get_with_retry(url: str, params: dict | None, max_retries: int = 5) -> dict:
+    delay = 2
+    for attempt in range(1, max_retries + 1):
+        try:
+            res = requests.get(url, params=params, timeout=30)
+            data = res.json()
+            err = data.get("error", {})
+            err_code = err.get("code")
+            if res.status_code == 200 and "error" not in data:
+                return data
+            if err_code == 190:
+                raise TokenExpiredError(err.get("message", "Access token không hợp lệ"))
+            if is_transient_error(err) and attempt < max_retries:
+                logger.warning("[RATE LIMIT] Thử lại sau %ss (lần %s/%s)", delay, attempt, max_retries)
+                time.sleep(delay)
+                delay *= 2
+                continue
+            return data
+        except TokenExpiredError:
+            raise
+        except Exception as exc:  # pragma: no cover - defensive path
+            if attempt < max_retries:
+                logger.warning("[RETRY] Lỗi kết nối: %s", exc)
+                time.sleep(delay)
+                delay *= 2
+                continue
+            return {"error": {"message": str(exc)}}
+    return {"error": {"message": "max retries exceeded"}}
+
+
+def get_page_access_token(user_token: str, page_id: str, version: str = "v20.0") -> str:
+    if user_token:
+        return user_token
+    return page_id
+
+
+def delete_comment(comment_id: str, access_token: str, version: str = "v20.0", max_retries: int = 5) -> bool:
+    url = f"https://graph.facebook.com/{version}/{comment_id}"
+    params = {"access_token": access_token}
+    delay = 2
+    for attempt in range(1, max_retries + 1):
+        try:
+            response = requests.delete(url, params=params, timeout=30)
+            data = response.json()
+            if response.status_code == 200 and data.get("success") is True:
+                return True
+            err = data.get("error", {})
+            if err.get("code") == 190:
+                raise TokenExpiredError(err.get("message", "Access token không hợp lệ"))
+            if is_transient_error(err) and attempt < max_retries:
+                time.sleep(delay)
+                delay *= 2
+                continue
+            return False
+        except TokenExpiredError:
+            raise
+        except Exception:
+            if attempt < max_retries:
+                time.sleep(delay)
+                delay *= 2
+                continue
+            return False
+    return False
+
+
+def hide_comment(comment_id: str, access_token: str, version: str = "v20.0", max_retries: int = 5) -> bool:
+    url = f"https://graph.facebook.com/{version}/{comment_id}"
+    params = {"access_token": access_token, "is_hidden": "true"}
+    delay = 2
+    for attempt in range(1, max_retries + 1):
+        try:
+            response = requests.post(url, params=params, timeout=30)
+            data = response.json()
+            if response.status_code == 200 and data.get("success") is True:
+                return True
+            err = data.get("error", {})
+            if err.get("code") == 190:
+                raise TokenExpiredError(err.get("message", "Access token không hợp lệ"))
+            if is_transient_error(err) and attempt < max_retries:
+                time.sleep(delay)
+                delay *= 2
+                continue
+            return False
+        except TokenExpiredError:
+            raise
+        except Exception:
+            if attempt < max_retries:
+                time.sleep(delay)
+                delay *= 2
+                continue
+            return False
+    return False
+
+
+def get_sub_comments(comment_id: str, access_token: str, version: str = "v20.0") -> list:
+    url = f"https://graph.facebook.com/{version}/{comment_id}/comments"
+    params = {
+        "access_token": access_token,
+        "fields": "id,message,from,created_time",
+        "limit": 100,
+    }
+    sub_comments = []
+    while url:
+        res = graph_get_with_retry(url, params)
+        if "data" in res:
+            sub_comments.extend(res["data"])
+        else:
+            logger.warning("[WARNING] Không lấy được sub-comment của %s", comment_id)
+        url = res.get("paging", {}).get("next")
+        params = None
+    return sub_comments
+
+
+def fetch_all_post_comments(post_id: str, access_token: str, version: str = "v20.0", limit: int = 1000) -> list:
+    url = f"https://graph.facebook.com/{version}/{post_id}/comments"
+    params = {
+        "access_token": access_token,
+        "fields": "id,message,from,created_time,comment_count",
+        "order": "chronological",
+        "limit": limit,
+    }
+
+    all_comments = []
+    while url:
+        data = graph_get_with_retry(url, params if params else None)
+        if "data" in data:
+            items = data["data"]
+            for comment in items:
+                all_comments.append(comment)
+                if comment.get("comment_count", 1) > 0:
+                    replies = get_sub_comments(comment["id"], access_token, version)
+                    all_comments.extend(replies)
+            url = data.get("paging", {}).get("next")
+            params = None
+        else:
+            logger.error("[ERROR] Lỗi khi lấy comment bài viết %s: %s", post_id, data.get("error", data))
+            break
+
+    return all_comments
+
+
+class CleanFacebook:
     def __init__(self, version: str = "v20.0"):
         self.version = version
 
-    def get_page_token(self, page: Page, user_token: Optional[UserToken] = None) -> PageToken:
-        if not page:
-            raise ValueError("Page không hợp lệ")
+    def _load_keywords(self, keywords: list[str] | None = None) -> list[str]:
+        if keywords:
+            return [str(item).strip() for item in keywords if str(item).strip()]
+        return [str(item).strip() for item in SpamWord.objects.values_list("key", flat=True) if str(item).strip()]
 
-        source_token = user_token
-        if source_token is None:
-            source_token = UserToken.objects.order_by("-created_at").first()
+    def _get_runtime_context(self, post_obj, user_token_obj=None):
+        user_token = user_token_obj.access_token if user_token_obj else None
+        page_token_obj = PageToken.objects.filter(page=post_obj.page).order_by("-created_at").first()
+        page_access_token = None
+        if page_token_obj and page_token_obj.access_token:
+            page_access_token = page_token_obj.access_token
+        elif user_token:
+            page_access_token = user_token
+        return {
+            "user_token": user_token,
+            "page_access_token": page_access_token or user_token or "",
+            "page_id": post_obj.page.page_fb_id,
+            "page_token_obj": page_token_obj,
+        }
 
-        if source_token is None:
-            raise ValueError("Chưa có UserToken nào để tạo PageToken")
+    def _should_process(self, comment: dict, keywords: list[str]) -> bool:
+        if not isinstance(comment, dict):
+            return False
+        message = comment.get("message") or ""
+        normalized_message = normalize_text(message)
+        if not normalized_message:
+            return False
+        for keyword in keywords:
+            normalized_keyword = normalize_text(keyword)
+            if normalized_keyword and normalized_keyword in normalized_message:
+                return True
+        return False
 
-        existing = (
-            PageToken.objects.filter(page=page, user_token=source_token)
-            .order_by("-created_at")
-            .first()
-        )
+    def scan_and_delete_spam(self, post_obj, action_type: str = "hide", user_token_obj=None):
+        context = self._get_runtime_context(post_obj, user_token_obj)
+        page_access_token = get_page_access_token(context["user_token"], context["page_id"], self.version)
+        if context.get("page_access_token"):
+            page_access_token = context["page_access_token"]
+        post_id_for_api = normalize_post_fb_id(post_obj.post_fb_id, context["page_id"])
+        keyword_list = self._load_keywords()
+        comments = fetch_all_post_comments(post_id_for_api, page_access_token, self.version, limit=1000)
+        matched_comments = []
 
-        if existing and existing.access_token:
-            try:
-                get_page_access_token(existing.access_token, page.page_fb_id, self.version)
-                return existing
-            except TokenExpiredError:
-                existing.access_token = ""
-                existing.expires_at = timezone.now()
-                existing.save(update_fields=["access_token", "expires_at"])
-
-        page_access_token = get_page_access_token(
-            source_token.access_token,
-            page.page_fb_id,
-            self.version,
-        )
-
-        return PageToken.objects.create(
-            user_token=source_token,
-            page=page,
-            access_token=page_access_token,
-            expires_at=None,
-        )
-
-    def _load_keywords(self, keywords: Optional[Iterable[str]] = None) -> list[str]:
-        if keywords is not None:
-            return [kw for kw in keywords if kw and str(kw).strip()]
-        return list(SpamWord.objects.order_by("key").values_list("key", flat=True))
-
-    def _match_keywords(self, raw_message: str, author_name: str, keywords: list[str]) -> list[str]:
-        normalized_keywords = [(kw, build_match_variants(kw)) for kw in keywords if kw and str(kw).strip()]
-        if not normalized_keywords:
-            return []
-
-        message_variants = build_match_variants(raw_message or "")
-        author_variants = build_match_variants(author_name or "")
-
-        matched = [
-            original_kw
-            for original_kw, kw_variants in normalized_keywords
-            if text_contains_keyword(message_variants, kw_variants)
-            or text_contains_keyword(author_variants, kw_variants)
-        ]
-        return matched
-
-    def _has_strong_signal(self, matched_keywords: list[str]) -> bool:
-        return any(len(build_match_variants(kw)["base"]) >= MIN_FUZZY_KEYWORD_LEN for kw in matched_keywords)
-
-    @transaction.atomic
-    def scan_and_delete_spam(
-        self,
-        post: Post | str,
-        page_token: PageToken | str,
-        keywords: Optional[Iterable[str]] = None,
-        action: str = "hide",
-    ) -> dict:
-        if action not in {"delete", "hide"}:
-            raise ValueError("Hành động không hợp lệ. Chỉ hỗ trợ delete hoặc hide")
-
-        if isinstance(post, str):
-            post_obj = Post.objects.filter(post_fb_id=post).first()
-            if post_obj is None:
-                raise ValueError(f"Không tìm thấy bài viết trong DB với post_fb_id={post}")
-        else:
-            post_obj = post
-
-        if isinstance(page_token, PageToken):
-            access_token = page_token.access_token
-        else:
-            access_token = page_token
-
-        keyword_list = self._load_keywords(keywords)
-        comments = fetch_all_post_comments(post_obj.post_fb_id, access_token, self.version)
-        processed_count = 0
-        saved_count = 0
-        action_fn = hide_comment if action == "hide" else delete_comment
-        action_label = "ẩn" if action == "hide" else "xóa"
-
-        for item in comments:
-            comment_id = item.get("id")
+        for comment in comments:
+            if not self._should_process(comment, keyword_list):
+                continue
+            comment_id = comment.get("id")
             if not comment_id:
                 continue
+            matched_comments.append(comment)
+            comment_record, _ = Comment.objects.get_or_create(
+                comment_fb_id=comment_id,
+                defaults={
+                    "post": post_obj,
+                    "title": comment.get("message") or "",
+                    "body": comment,
+                    "status": None,
+                },
+            )
+            if comment_record.post_id != post_obj.id:
+                comment_record.post = post_obj
+            comment_record.title = comment.get("message") or ""
+            comment_record.body = comment
+            comment_record.save()
 
-            raw_message = item.get("message", "") or ""
-            author_name = item.get("from", {}).get("name") or ""
-            matched_keywords = self._match_keywords(raw_message, author_name, keyword_list)
-            if not matched_keywords:
-                continue
-
-            if not self._has_strong_signal(matched_keywords):
-                continue
-
-            if action_fn(comment_id, access_token, self.version):
-                processed_count += 1
-                Comment.objects.update_or_create(
-                    comment_fb_id=comment_id,
-                    defaults={
-                        "post": post_obj,
-                        "title": raw_message or author_name or comment_id,
-                        "status": action,
-                    },
-                )
-                saved_count += 1
+            if action_type == "delete":
+                success = delete_comment(comment_id, page_access_token, self.version)
+            else:
+                success = hide_comment(comment_id, page_access_token, self.version)
+            if success:
+                comment_record.status = action_type
+                comment_record.save()
 
         return {
-            "processed_count": processed_count,
-            "saved_count": saved_count,
-            "action": action,
-            "action_label": action_label,
-            "post": post_obj,
+            "post_id": post_obj.id,
+            "post_fb_id": post_obj.post_fb_id,
+            "processed_count": len(matched_comments),
         }
 
-    @transaction.atomic
-    def run_for_page(
-        self,
-        page: Page,
-        action: str = "hide",
-        user_token: Optional[UserToken] = None,
-        keywords: Optional[Iterable[str]] = None,
-        posts: Optional[Iterable[Post]] = None,
-    ) -> dict:
-        if action not in {"delete", "hide"}:
-            raise ValueError("Hành động không hợp lệ. Chỉ hỗ trợ delete hoặc hide")
-
-        page_token = self.get_page_token(page, user_token=user_token)
-        keyword_list = self._load_keywords(keywords)
-
-        processed_total = 0
-        saved_total = 0
+    def run_for_posts(self, posts, action_type: str = "hide", user_token_obj=None):
         results = []
-        posts_to_process = list(posts or page.posts.all())
-
-        for post in posts_to_process:
-            try:
-                result = self.scan_and_delete_spam(
-                    post=post,
-                    page_token=page_token,
-                    keywords=keyword_list,
-                    action=action,
-                )
-            except TokenExpiredError:
-                raise
-            except Exception as exc:  # pragma: no cover - safety net for runtime errors
-                results.append({"post_id": post.post_fb_id, "error": str(exc)})
-                continue
-
-            processed_total += result["processed_count"]
-            saved_total += result["saved_count"]
-            results.append(result)
-
-        return {
-            "page": page,
-            "page_token": page_token,
-            "processed_count": processed_total,
-            "saved_count": saved_total,
-            "results": results,
-            "action": action,
-            "message": f"Đã xử lý {processed_total} comment và lưu {saved_total} comment vào DB",
-        }
+        for post_obj in posts:
+            results.append(self.scan_and_delete_spam(post_obj, action_type=action_type, user_token_obj=user_token_obj))
+        return results
